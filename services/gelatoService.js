@@ -4,8 +4,10 @@ const fetch = require('node-fetch');
 class GelatoService {
   constructor() {
     this.apiKey = process.env.GELATO_API_KEY;
-    this.baseURL = process.env.GELATO_API_URL || 'https://api.gelato.com/v4';
+    // Align with Gelato docs: default to order.gelatoapis.com unless overridden
+    this.baseURL = process.env.GELATO_API_URL || 'https://order.gelatoapis.com';
     this.timeout = 30000; // 30 seconds
+    this.fallbackProductId = process.env.GELATO_FALLBACK_PRODUCT_ID || null;
 
     if (!this.apiKey) {
       console.warn('GELATO_API_KEY not found in environment variables');
@@ -36,7 +38,14 @@ class GelatoService {
       const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${data.message || response.statusText}`);
+        const message = data?.message || data?.error || response.statusText;
+        console.error('Gelato API HTTP error', response.status, message, data);
+        return {
+          success: false,
+          message,
+          status: response.status,
+          error: data
+        };
       }
 
       return {
@@ -59,47 +68,51 @@ class GelatoService {
     try {
       if (!this.apiKey) throw new Error('Gelato API key not configured');
 
+      // Align to Gelato expectation: top-level order fields (no extra wrapper)
       const gelatoOrderData = {
-        order: {
-          orderNumber: order.orderNumber,
-          customer: {
-            firstName: order.customer.firstName,
-            lastName: order.customer.lastName,
-            email: order.customer.email,
-            phone: order.customer.phone
-          },
-          shippingAddress: {
-            firstName: order.shippingAddress.firstName,
-            lastName: order.shippingAddress.lastName,
-            address: order.shippingAddress.address,
-            city: order.shippingAddress.city,
-            postalCode: order.shippingAddress.postalCode,
-            country: order.shippingAddress.country
-          },
-          items: order.items.map(item => ({
-            productId: item.gelatoProductId,
-            quantity: item.quantity,
-            options: item.selectedOptions || {},
-            metadata: {
-              originalProductId: item.productId.toString(),
-              productName: item.name,
-              unitPrice: item.price
-            }
-          })),
+        orderReferenceId: order.orderNumber,
+        customer: {
+          firstName: order.customer.firstName,
+          lastName: order.customer.lastName,
+          email: order.customer.email,
+          phone: order.customer.phone
+        },
+        shippingAddress: {
+          firstName: order.shippingAddress.firstName,
+          lastName: order.shippingAddress.lastName,
+          address: order.shippingAddress.address,
+          city: order.shippingAddress.city,
+          postalCode: order.shippingAddress.postalCode,
+          country: order.shippingAddress.country
+        },
+        currency: 'USD',
+        items: order.items.map((item, index) => ({
+          // Required by Gelato: unique reference per item in the order
+          itemReferenceId: `${order.orderNumber}-ITEM-${index + 1}`,
+          // Use item.gelatoProductId if valid, otherwise allow a configured fallback product id
+          productId: item.gelatoProductId || this.fallbackProductId,
+          quantity: item.quantity,
+          options: item.selectedOptions || {},
           metadata: {
-            originalOrderId: order._id.toString(),
-            orderNumber: order.orderNumber,
-            total: order.totals.total,
-            subtotal: order.totals.subtotal,
-            shipping: order.totals.shipping,
-            tax: order.totals.tax
+            ...(item.productId ? { originalProductId: item.productId.toString() } : {}),
+            productName: item.name,
+            unitPrice: item.price
           }
+        })),
+        metadata: {
+          originalOrderId: order._id.toString(),
+          orderNumber: order.orderNumber,
+          total: order.totals.total,
+          subtotal: order.totals.subtotal,
+          shipping: order.totals.shipping,
+          tax: order.totals.tax
         }
       };
 
       console.log('Sending order to Gelato API:', JSON.stringify(gelatoOrderData, null, 2));
 
-      const response = await this.makeRequest('/orders', {
+      // Gelato Orders API uses versioned endpoints
+      const response = await this.makeRequest('/v4/orders', {
         method: 'POST',
         body: JSON.stringify(gelatoOrderData)
       });
@@ -137,7 +150,7 @@ class GelatoService {
     try {
       if (!this.apiKey) throw new Error('Gelato API key not configured');
 
-      const response = await this.makeRequest(`/orders/${gelatoOrderId}`, { method: 'GET' });
+      const response = await this.makeRequest(`/v4/orders/${gelatoOrderId}`, { method: 'GET' });
 
       if (response.success) {
         return {

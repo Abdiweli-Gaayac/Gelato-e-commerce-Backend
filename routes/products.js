@@ -190,57 +190,17 @@
 // ............................................
 const express = require('express');
 const router = express.Router();
-const fetch = require('node-fetch');
-
-const GELATO_API_KEY = process.env.GELATO_API_KEY;
-const GELATO_API_URL = process.env.GELATO_API_URL || 'https://api.gelato.com/v4';
 
 // Helper function to fetch from Gelato API
 async function fetchGelato(endpoint) {
-  // Check if API key is configured
-  if (!GELATO_API_KEY || GELATO_API_KEY === 'demo-api-key-for-testing') {
-    console.log('Gelato API key not configured, returning demo data');
-    return {
-      success: true,
-      data: getDemoProducts()
-    };
-  }
-
-  try {
-    const response = await fetch(`${GELATO_API_URL}${endpoint}`, {
-      headers: {
-        'X-API-KEY': GELATO_API_KEY,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'User-Agent': 'Gelato-Ecommerce-Backend/1.0.0'
-      }
-    });
-
-    const data = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      console.error('Gelato API error:', data.message || 'Unknown error');
-      // Return demo data if API fails
-      return {
-        success: true,
-        data: getDemoProducts()
-      };
-    }
-
-    return { success: true, data };
-  } catch (error) {
-    console.error('Gelato API error:', error.message);
-    // Return demo data if request fails
-    return {
-      success: true,
-      data: getDemoProducts()
-    };
-  }
+  // Gelato does not expose a public products catalog endpoint.
+  // Serve demo products quietly to power the storefront UI.
+  return { success: true, data: getDemoProducts() };
 }
 
 // Demo products for testing when Gelato API is not available
 function getDemoProducts() {
-  return [
+  const base = [
     {
       id: 'demo-1',
       name: 'Premium Cotton T-Shirt',
@@ -390,6 +350,25 @@ function getDemoProducts() {
       reviews: 134
     }
   ];
+
+  // If a real Gelato product id is provided via env, inject it into the list
+  const fallbackId = process.env.GELATO_FALLBACK_PRODUCT_ID;
+  if (fallbackId && !base.find(p => p.id === fallbackId)) {
+    base.unshift({
+      id: fallbackId,
+      name: 'Gelato Test T‑Shirt (Live)',
+      description: 'Live Gelato product injected from configuration for checkout testing',
+      price: 19.99,
+      category: 'apparel',
+      image: 'https://placehold.co/400x400/png?text=Gelato+Product',
+      isNew: true,
+      isSale: false,
+      rating: 4.6,
+      reviews: 12
+    });
+  }
+
+  return base;
 }
 
 // ==========================

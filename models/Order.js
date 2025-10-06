@@ -4,7 +4,7 @@ const orderItemSchema = new mongoose.Schema({
   productId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Product',
-    required: true
+    required: false
   },
   gelatoProductId: {
     type: String,
@@ -74,7 +74,7 @@ const orderSchema = new mongoose.Schema({
   orderNumber: {
     type: String,
     unique: true,
-    required: true
+    required: false
   },
   customer: {
     type: customerSchema,
@@ -192,6 +192,10 @@ orderSchema.statics.getByCustomer = function(email) {
 };
 
 module.exports = mongoose.model('Order', orderSchema);
+
+
+
+
 
 
 

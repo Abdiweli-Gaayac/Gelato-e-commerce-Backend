@@ -4,6 +4,8 @@ const Order = require('../models/Order');
 const Product = require('../models/Product');
 const { forwardToGelato } = require('../services/gelatoService');
 
+const HAS_GELATO = process.env.GELATO_API_KEY && process.env.GELATO_API_KEY !== 'demo-api-key-for-testing';
+
 // POST /checkout - Process checkout and create order
 router.post('/', async (req, res) => {
   try {
@@ -47,13 +49,14 @@ router.post('/', async (req, res) => {
       }
     }
 
-    // Process order items (using demo data since we're not using database products)
+    // Process order items (demo products don't have Mongo IDs; keep optional)
     const orderItems = [];
     for (const item of items) {
       // For demo purposes, we'll use the item data directly
       // In a real application, you'd validate against your product database
       orderItems.push({
-        productId: item.id,
+        // Only set productId if it's a valid Mongo ObjectId string
+        ...(item.productId && typeof item.productId === 'string' && item.productId.length === 24 ? { productId: item.productId } : {}),
         gelatoProductId: item.id, // Using item ID as gelato ID for demo
         name: item.name,
         price: item.price,
@@ -74,13 +77,77 @@ router.post('/', async (req, res) => {
 
     await order.save();
 
-    // For demo purposes, we'll simulate successful order processing
-    // In a real application, you would integrate with Gelato or another print service
+    // If Gelato is configured, forward order and persist response
+    if (HAS_GELATO) {
+      try {
+        const gelatoResp = await forwardToGelato(order);
+
+        if (gelatoResp.success) {
+          // Persist Gelato identifiers and status
+          order.gelatoOrderId = gelatoResp.data.gelatoOrderId || order.gelatoOrderId;
+          if (gelatoResp.data.trackingNumber) order.gelatoTrackingNumber = gelatoResp.data.trackingNumber;
+          if (gelatoResp.data.trackingUrl) order.gelatoTrackingUrl = gelatoResp.data.trackingUrl;
+          if (gelatoResp.data.status) order.status = gelatoResp.data.status;
+
+          order.statusHistory = order.statusHistory || [];
+          order.statusHistory.push({
+            status: order.status,
+            timestamp: new Date(),
+            note: 'Order forwarded to Gelato successfully'
+          });
+          await order.save();
+
+          return res.status(201).json({
+            success: true,
+            message: 'Order created and forwarded to Gelato',
+            data: {
+              orderId: order._id,
+              orderNumber: order.orderNumber,
+              gelatoOrderId: order.gelatoOrderId,
+              status: order.status
+            }
+          });
+        }
+
+        // Gelato responded with error; mark order as failed but keep it stored
+        order.status = 'failed';
+        order.statusHistory = order.statusHistory || [];
+        order.statusHistory.push({
+          status: 'failed',
+          timestamp: new Date(),
+          note: `Gelato forwarding failed: ${gelatoResp.message || 'Unknown error'}`
+        });
+        await order.save();
+
+        return res.status(502).json({
+          success: false,
+          message: 'Order created but forwarding to Gelato failed',
+          error: gelatoResp.message,
+          data: { orderId: order._id, orderNumber: order.orderNumber, status: order.status }
+        });
+      } catch (processingError) {
+        console.error('Gelato forwarding error:', processingError);
+        order.status = 'failed';
+        order.statusHistory = order.statusHistory || [];
+        order.statusHistory.push({
+          status: 'failed',
+          timestamp: new Date(),
+          note: 'Order processing failed: ' + processingError.message
+        });
+        await order.save();
+
+        return res.status(502).json({
+          success: false,
+          message: 'Order created but forwarding to Gelato failed',
+          error: processingError.message,
+          data: { orderId: order._id, orderNumber: order.orderNumber, status: order.status }
+        });
+      }
+    }
+
+    // Demo mode: simulate success if Gelato is not configured
     try {
-      // Simulate processing delay
       await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // Update order status to completed for demo
       order.status = 'completed';
       order.statusHistory = order.statusHistory || [];
       order.statusHistory.push({
@@ -90,9 +157,7 @@ router.post('/', async (req, res) => {
       });
       await order.save();
 
-      console.log(`Order ${order.orderNumber} processed successfully in demo mode`);
-
-      res.status(201).json({
+      return res.status(201).json({
         success: true,
         message: 'Order created and processed successfully',
         data: {
@@ -104,8 +169,6 @@ router.post('/', async (req, res) => {
       });
     } catch (processingError) {
       console.error('Order processing error:', processingError);
-      
-      // Order created but processing failed
       order.status = 'failed';
       order.statusHistory = order.statusHistory || [];
       order.statusHistory.push({
@@ -115,7 +178,7 @@ router.post('/', async (req, res) => {
       });
       await order.save();
 
-      res.status(201).json({
+      return res.status(201).json({
         success: true,
         message: 'Order created but processing failed',
         data: {
